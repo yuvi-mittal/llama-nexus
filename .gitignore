@@ -1,1 +1,20 @@
 /target
+
+# Compiled binaries
+llama-nexus
+*.wasm
+*.tar.gz
+
+# Downloaded model files
+*.gguf
+SHA256SUM
+
+# Local database files
+*.db
+
+# Build artifacts (Rust)
+Cargo.lock
+
+# Logs & temp files
+*.log
+*.tmp

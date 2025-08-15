@@ -23,10 +23,10 @@ pub struct DatabaseManager {
 impl DatabaseManager {
     pub async fn new(database_url: &str) -> Result<Self> {
 
-        let mut url = if database_url.starts_with("sqlite:") || database_url.starts_with("file:") {
+        let mut url = if database_url.starts_with("sqlite:") {
             database_url.to_string()
         } else {
-            // ensure parent directory exists if path contains one
+
             if let Some(parent) = std::path::Path::new(database_url).parent() {
                 if !parent.as_os_str().is_empty() && !parent.exists() {
                     std::fs::create_dir_all(parent)?;
@@ -104,21 +104,9 @@ impl DatabaseManager {
         Ok(messages)
     }
 
-    pub async fn get_all_sessions(&self) -> Result<Vec<String>> {
-        let rows = sqlx::query("SELECT DISTINCT session_id FROM chat_messages")
-            .fetch_all(&self.pool)
-            .await?;
 
-        let sessions = rows
-            .into_iter()
-            .map(|row| row.get("session_id"))
-            .collect();
-
-        Ok(sessions)
-    }
 }
  
-// In-memory fallback for when database is not available
 pub type ChatHistory = Arc<Mutex<HashMap<String, Vec<String>>>>;
 
 pub struct ChatStorage {
@@ -154,7 +142,7 @@ impl ChatStorage {
         if let Some(db) = &self.database {
             db.save_message(&message).await?;
         } else {
-            // Fallback to memory storage
+
             let mut history = self.memory_fallback.lock().await;
             let conversation = history.entry(session_id.to_string()).or_default();
             conversation.push(format!("User: {}", user_message));
@@ -176,13 +164,12 @@ impl ChatStorage {
             
             Ok(history)
         } else {
-            // Fallback to memory storage
+
             let history = self.memory_fallback.lock().await;
             Ok(history.get(session_id).cloned().unwrap_or_default())
         }
     }
 
-    /// Returns conversation as ordered (user, bot) pairs for structured prompt construction
     pub async fn get_session_pairs(&self, session_id: &str) -> Result<Vec<(String,String)>> {
         if let Some(db) = &self.database {
             let messages = db.get_session_history(session_id).await?;
@@ -192,7 +179,7 @@ impl ChatStorage {
             let Some(lines) = history.get(session_id) else { return Ok(vec![]); };
             let mut pairs = Vec::new();
             let mut i = 0;
-            while i + 1 < lines.len() { // expect User:, Bot: alternating
+            while i + 1 < lines.len() { 
                 let user = lines[i].strip_prefix("User: ").unwrap_or(&lines[i]).to_string();
                 let bot = lines[i+1].strip_prefix("Bot: ").unwrap_or(&lines[i+1]).to_string();
                 pairs.push((user, bot));
@@ -202,13 +189,4 @@ impl ChatStorage {
         }
     }
 
-    pub async fn get_all_sessions(&self) -> Result<Vec<String>> {
-        if let Some(db) = &self.database {
-            db.get_all_sessions().await
-        } else {
-            // Fallback to memory storage
-            let history = self.memory_fallback.lock().await;
-            Ok(history.keys().cloned().collect())
-        }
-    }
 }

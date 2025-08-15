@@ -10,7 +10,7 @@ mod api{
     pub mod responses;
 }
 
-use api::responses::{handle_response, get_chat_history, get_all_sessions};
+use api::responses::{handle_response, get_chat_history};
 use database::ChatStorage;
 
 use std::{
@@ -144,35 +144,6 @@ async fn main() -> ServerResult<()> {
         Arc::new(AppState::new(config, ServerInfo::default()))
     };
 
-    // Auto-register inline models from config (if any)
-    {
-        let cfg = state.config.read().await.clone();
-        if !cfg.models.is_empty() {
-            dual_info!("Auto-registering {} model(s) from config", cfg.models.len());
-            for m in cfg.models.iter() {
-                // Build a Server struct per inline model kind
-                let kind = match crate::server::ServerKind::from_str(&m.kind) {
-                    Ok(k) => k,
-                    Err(_) => { dual_error!("Unknown model kind '{}' - skipping", m.kind); continue; }
-                };
-                // Use existing Deserialize impl (id auto-generated)
-                let temp = serde_json::json!({
-                    "url": m.url,
-                    "kind": kind,
-                    "api_key": m.api_key.clone().map(|k| if k.starts_with("Bearer ") { k } else { format!("Bearer {}", k) }),
-                });
-                let  server: crate::server::Server = match serde_json::from_value(temp) {
-                    Ok(s) => s,
-                    Err(e) => { dual_error!("Failed to build server for inline model '{}': {}", m.id, e); continue; }
-                };                
-                if let Err(e) = state.register_downstream_server(server.clone()).await { dual_error!("Failed to register inline model '{}': {}", m.id, e); continue; }
-                // Add a synthetic models entry mapping this server id to the logical model id so /responses can pick it
-                let mut models_map = state.models.write().await;
-                models_map.insert(server.id.clone(), vec![endpoints::models::Model { id: m.id.clone(), created: chrono::Utc::now().timestamp() as u64, object: "model".into(), owned_by: "inline".into() }]);
-            }
-        }
-    }
-
     // Start the health check task if enabled
     if cli.check_health {
         dual_info!("Health check is enabled");
@@ -205,7 +176,6 @@ async fn main() -> ServerResult<()> {
             .route("/v1/info", get(handlers::info_handler))
             .route("/responses", post(handle_response))
             .route("/chat/history/{session_id}", get(get_chat_history))
-            .route("/chat/sessions", get(get_all_sessions))
             .route(
                 "/admin/servers/register",
                 post(handlers::admin::register_downstream_server_handler),

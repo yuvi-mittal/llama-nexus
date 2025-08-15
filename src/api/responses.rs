@@ -13,8 +13,6 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 pub struct ChatRequest {
     session_id: String,
     user_message: String,
-    /// Optional model name; if absent we pick the first registered chat model
-    #[serde(default)]
     model: Option<String>,
 }
 
@@ -39,11 +37,10 @@ pub async fn handle_response(
     headers: HeaderMap,
     Json(payload): Json<ChatRequest>,
 ) -> ServerResult<Json<ChatResponse>> {
-    // 1. Determine model
+
     let model = if let Some(m) = payload.model.clone() {
         m
     } else {
-        // choose first known model from state.models; if empty -> error
         let models_map = state.models.read().await;
         let first = models_map.values().flat_map(|v| v.iter()).next();
         match first {
@@ -52,7 +49,6 @@ pub async fn handle_response(
         }
     };
 
-    // 2. Build full history messages including system prompt
     const SYSTEM_PROMPT: &str = "You are an AI assistant. Answer as helpfully and concisely as possible.";
     let mut messages: Vec<ChatCompletionRequestMessage> = Vec::new();
     messages.push(ChatCompletionRequestMessage::new_system_message(
@@ -60,7 +56,6 @@ pub async fn handle_response(
         None,
     ));
 
-    // previous turns
     if let Ok(pairs) = state.chat_storage.get_session_pairs(&payload.session_id).await {
         for (user, bot) in pairs.into_iter() {
             let user_msg = ChatCompletionRequestMessage::new_user_message(
@@ -76,13 +71,12 @@ pub async fn handle_response(
             messages.push(assistant_msg);
         }
     }
-    // new user message
+
     messages.push(ChatCompletionRequestMessage::new_user_message(
         ChatCompletionUserMessageContent::Text(payload.user_message.clone()),
         None,
     ));
 
-    // 3. Prepare downstream request (non-stream)
     let request_body = ChatCompletionRequest {
         model: Some(model.clone()),
         messages,
@@ -90,15 +84,13 @@ pub async fn handle_response(
         ..Default::default()
     };
 
-    // 4. Pick chat server
-    // Acquire a downstream chat server (required now, no fallback)
+
     let chat_server = {
         let servers = state.server_group.read().await;
         let chat_group = servers.get(&ServerKind::chat).ok_or_else(|| ServerError::Operation("No chat server available".into()))?;
         chat_group.next().await.map_err(|e| ServerError::Operation(format!("Failed to acquire chat server: {e}")))?
     };
 
-    // Send request to downstream
     let url = format!("{}/chat/completions", chat_server.url.trim_end_matches('/'));
     let mut client = reqwest::Client::new().post(&url).header(CONTENT_TYPE, "application/json");
     if let Some(api_key) = &chat_server.api_key { if !api_key.is_empty() { client = client.header(AUTHORIZATION, api_key); }} else if let Some(auth) = headers.get("authorization").and_then(|h| h.to_str().ok()) { client = client.header(AUTHORIZATION, auth);}    
@@ -118,7 +110,6 @@ pub async fn handle_response(
         .unwrap_or("(no content)")
         .to_string();
 
-    // 6. Persist turn
     if let Err(e) = state.chat_storage.save_conversation(&payload.session_id, &payload.user_message, &bot_reply).await {
         eprintln!("Failed to save conversation: {e}");
     }
@@ -135,15 +126,6 @@ pub async fn get_chat_history(
             session_id,
             messages,
         })),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
-pub async fn get_all_sessions(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<SessionsResponse>, StatusCode> {
-    match state.chat_storage.get_all_sessions().await {
-        Ok(sessions) => Ok(Json(SessionsResponse { sessions })),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
